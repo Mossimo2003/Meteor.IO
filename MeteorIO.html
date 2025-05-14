@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meteor.io</title>
+  <link rel="icon" href="data:,">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: Arial, sans-serif;
+    }
+    body, html {
+      height: 100%;
+      overflow: hidden;
+      background: rgb(1, 6, 54);
+    }
+    #gameCanvas {
+      display: block;
+      margin: auto;
+      background: url('Space_BG.jpg') no-repeat center center;
+      background-size: cover;
+    }
+    .menu, .settings, .difficulty, .result-panel, .in-game-settings {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.85);
+      padding: 25px 20px;
+      border-radius: 12px;
+      color: white;
+      text-align: center;
+      display: none;
+      min-width: 240px;
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+      z-index: 100;
+    }
+
+    .menu.active, .settings.active, .difficulty.active, .result-panel.active, .in-game-settings.active {
+      display: block;
+    }
+
+    button {
+      margin: 10px 5px;
+      padding: 12px 24px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      background: #2196F3;
+      color: white;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+
+    button:hover {
+      background: #1976D2;
+    }
+
+    h1, h2 {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin: 10px 0;
+      font-size: 14px;
+    }
+
+    #survivalTime {
+      margin: 15px 0;
+      font-size: 18px;
+    }
+
+    #pauseButton {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      padding: 8px 16px;
+      font-size: 14px;
+      display: none;
+      z-index: 50;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="560" height="920"></canvas>
+  <button id="pauseButton" onclick="togglePause()">Pause</button>
+
+  <div id="mainMenu" class="menu active">
+    <h1>Meteor.io</h1>
+    <button onclick="showPanel('difficultyMenu')">Start</button>
+    <button onclick="showPanel('settingsMenu')">Settings</button>
+  </div>
+
+  <div id="settingsMenu" class="settings">
+    <h2>Settings</h2>
+    <label>
+      <input type="checkbox" id="muteMusic"> Mute Music
+    </label><br>
+    <label>
+      <input type="checkbox" id="muteSFX"> Mute SFX
+    </label><br>
+    <button onclick="showPanel('mainMenu')">Back</button>
+  </div>
+
+  <div id="difficultyMenu" class="difficulty">
+    <h2>Select Difficulty</h2>
+    <button onclick="startGame('easy')">Easy</button>
+    <button onclick="startGame('medium')">Medium</button>
+    <button onclick="startGame('hard')">Hard</button><br>
+    <button onclick="showPanel('mainMenu')">Back</button>
+  </div>
+
+  <div id="resultPanel" class="result-panel">
+    <h2>Game Over</h2>
+    <p id="survivalTime">You survived for 0 seconds</p>
+    <button onclick="showPanel('difficultyMenu')">Exit</button>
+    <button onclick="restartGame()">Try Again</button>
+  </div>
+
+  <div id="inGameSettings" class="in-game-settings">
+    <h2>Game Settings</h2>
+    <label>
+      <input type="checkbox" id="inGameMuteMusic"> Mute Music
+    </label><br>
+    <label>
+      <input type="checkbox" id="inGameMuteSFX"> Mute SFX
+    </label><br>
+    <button onclick="resumeGame()">Resume</button>
+    <button onclick="restartGame()">Restart</button>
+    <button onclick="exitToMenu()">Exit to Menu</button>
+  </div>
+
+  <audio id="backgroundMusic" loop>
+    <source src="Space_BGM.mp3" type="audio/mpeg">
+    Your browser does not support the audio element.
+  </audio>
+  <audio id="sfxExplosion">
+    <source src="Explosion.mp3" type="audio/mpeg">
+    Your browser does not support the audio element.
+  </audio>
+
+  <script>
+    // Game elements
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const bgMusic = document.getElementById("backgroundMusic");
+    const sfxExplosion = document.getElementById("sfxExplosion");
+    const pauseButton = document.getElementById("pauseButton");
+
+    // Game state
+    let spaceship = {
+      x: canvas.width / 2 - 20,
+      y: canvas.height - 60,
+      width: 40,
+      height: 40,
+      speed: 3,
+      image: new Image()
+    };
+    spaceship.image.src = 'Spaceship.png';
+
+    let meteors = [];
+    let meteorSpeed = 2;
+    let gameOver = false;
+    let keys = {};
+    let gameStartTime;
+    let difficulty = 'easy';
+    let isPaused = false;
+    let animationId = null;
+    let lastFrameTime = 0;
+
+    // Initialize audio
+    bgMusic.volume = 0.5;
+    sfxExplosion.volume = 0.5;
+
+    // Panel management
+    const panels = ["mainMenu", "settingsMenu", "difficultyMenu", "resultPanel", "inGameSettings"];
+    function showPanel(id) {
+      panels.forEach(panel => document.getElementById(panel).classList.remove("active"));
+      if (id && document.getElementById(id)) {
+        document.getElementById(id).classList.add("active");
+      }
+    }
+
+    // Drawing functions
+    function drawSpaceship() {
+      ctx.drawImage(spaceship.image, spaceship.x, spaceship.y, spaceship.width, spaceship.height);
+    }
+
+    function drawMeteor(meteor) {
+      const size = meteor.radius * 2;
+      ctx.drawImage(meteor.image, meteor.x - meteor.radius, meteor.y - meteor.radius, size, size);
+    }
+
+    // Game logic
+    function updateMeteors() {
+      if (Math.random() < 0.05) {
+        const meteor = {
+          x: Math.random() * canvas.width,
+          y: 0,
+          radius: 15 + Math.random() * 10,
+          image: new Image()
+        };
+        meteor.image.src = 'Meteor.png';
+        meteors.push(meteor);
+      }
+      
+      meteors.forEach(meteor => meteor.y += meteorSpeed);
+      meteors = meteors.filter(meteor => meteor.y < canvas.height);
+    }
+
+    function checkCollision() {
+      for (let meteor of meteors) {
+        let dx = meteor.x - (spaceship.x + spaceship.width / 2);
+        let dy = meteor.y - (spaceship.y + spaceship.height / 2);
+        let distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance < meteor.radius + spaceship.width / 2) {
+          if (!document.getElementById("muteSFX").checked) {
+            sfxExplosion.currentTime = 0;
+            sfxExplosion.play();
+          }
+          endGame();
+          return;
+        }
+      }
+    }
+
+    function updateSpaceship() {
+      if (keys["ArrowLeft"] && spaceship.x > 0) spaceship.x -= spaceship.speed;
+      if (keys["ArrowRight"] && spaceship.x + spaceship.width < canvas.width) spaceship.x += spaceship.speed;
+    }
+
+    // Game control functions
+    function startGame(selectedDifficulty) {
+      difficulty = selectedDifficulty;
+      meteorSpeed = difficulty === 'easy' ? 2 : difficulty === 'medium' ? 3 : 4;
+      spaceship.x = canvas.width / 2 - 20;
+      meteors = [];
+      gameOver = false;
+      isPaused = false;
+      keys = {};
+      gameStartTime = Date.now();
+      
+      if (!document.getElementById("muteMusic").checked) {
+        bgMusic.currentTime = 0;
+        bgMusic.play().catch(e => console.error("Audio play failed:", e));
+      }
+      
+      pauseButton.style.display = 'block';
+      showPanel(null); // Hide all panels
+      lastFrameTime = performance.now();
+      gameLoop();
+    }
+
+    function endGame() {
+      gameOver = true;
+      cancelAnimationFrame(animationId);
+      let survived = ((Date.now() - gameStartTime) / 1000).toFixed(2);
+      document.getElementById("survivalTime").innerText = `You survived for ${survived} seconds`;
+      showPanel("resultPanel");
+      pauseButton.style.display = 'none';
+      bgMusic.pause();
+    }
+
+    function restartGame() {
+      stopGame();
+      startGame(difficulty);
+    }
+
+    function exitToMenu() {
+      stopGame();
+      showPanel("mainMenu");
+    }
+
+    function stopGame() {
+      gameOver = true;
+      isPaused = false;
+      cancelAnimationFrame(animationId);
+      animationId = null;
+      pauseButton.style.display = 'none';
+      bgMusic.pause();
+    }
+
+    // Pause functionality
+    function togglePause() {
+      if (isPaused) {
+        resumeGame();
+      } else {
+        pauseGame();
+      }
+    }
+
+    function pauseGame() {
+      if (gameOver) return;
+      isPaused = true;
+      pauseButton.textContent = "Resume";
+      bgMusic.pause();
+      showPanel("inGameSettings");
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+
+    function resumeGame() {
+      isPaused = false;
+      pauseButton.textContent = "Pause";
+      if (!document.getElementById("muteMusic").checked) {
+        bgMusic.play().catch(e => console.error("Audio resume failed:", e));
+      }
+      showPanel(null);
+      lastFrameTime = performance.now();
+      gameLoop();
+    }
+
+    // Main game loop
+    function gameLoop(timestamp) {
+      if (gameOver || isPaused) return;
+      
+      animationId = requestAnimationFrame(gameLoop);
+      
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      updateSpaceship();
+      updateMeteors();
+      drawSpaceship();
+      meteors.forEach(drawMeteor);
+      checkCollision();
+      
+      // Gradually increase difficulty
+      meteorSpeed += 0.0008;
+    }
+
+    // Event listeners
+    document.addEventListener("keydown", e => {
+      keys[e.key] = true;
+      if (e.key === "Escape" && !gameOver && pauseButton.style.display === 'block') {
+        togglePause();
+      }
+    });
+    
+    document.addEventListener("keyup", e => keys[e.key] = false);
+
+    // Audio control synchronization
+    document.getElementById("muteMusic").addEventListener("change", e => {
+      bgMusic.muted = e.target.checked;
+      document.getElementById("inGameMuteMusic").checked = e.target.checked;
+    });
+    
+    document.getElementById("muteSFX").addEventListener("change", e => {
+      sfxExplosion.muted = e.target.checked;
+      document.getElementById("inGameMuteSFX").checked = e.target.checked;
+    });
+
+    document.getElementById("inGameMuteMusic").addEventListener("change", e => {
+      bgMusic.muted = e.target.checked;
+      document.getElementById("muteMusic").checked = e.target.checked;
+    });
+    
+    document.getElementById("inGameMuteSFX").addEventListener("change", e => {
+      sfxExplosion.muted = e.target.checked;
+      document.getElementById("muteSFX").checked = e.target.checked;
+    });
+
+    // Preload images
+    const preloadImages = ['Spaceship.png', 'Meteor.png', 'Space_BG.jpg'];
+    preloadImages.forEach(src => {
+      const img = new Image();
+      img.src = src;
+    });
+  </script>
+</body>
+</html>
